@@ -2,7 +2,10 @@
 
 namespace App\Providers;
 
+use App\Payments\Gateways\StripeGateway;
+use App\Payments\PaymentGatewayManager;
 use Illuminate\Support\ServiceProvider;
+use Stripe\StripeClient;
 
 class PaymentServiceProvider extends ServiceProvider
 {
@@ -11,7 +14,11 @@ class PaymentServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->singleton(PaymentGatewayManager::class);
+        $this->app->bind(StripeGateway::class, fn() => new StripeGateway(
+            new StripeClient( (string) config('services.stripe.secret')),
+            (string) config('services.stripe.webhook-secret'),
+        ));
     }
 
     /**
@@ -19,6 +26,9 @@ class PaymentServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        if (str_contains((string) config('services.stripe.secret'), '_live_')
+            && ! config('payments.allow_live_keys')) {
+            throw new \RuntimeException('Live Stripe keys are not allowed in this release.');
+        }
     }
 }
