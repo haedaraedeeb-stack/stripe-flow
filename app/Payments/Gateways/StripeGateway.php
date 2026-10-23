@@ -3,13 +3,22 @@
 namespace App\Payments\Gateways;
 
 use App\Enums\GatewayEventType;
+use App\Enums\PaymentStatus;
+use App\Models\Payment;
 use App\Payments\Contracts\PaymentGateway;
 use App\Payments\DTO\CreatePaymentData;
 use App\Payments\DTO\GatewayEvent;
 use App\Payments\DTO\GatewayPaymentResult;
+use App\Payments\Exceptions\GatewayRejectedException;
+use App\Payments\Exceptions\GatewayUnavailableException;
 use App\Payments\Exceptions\InvalidWebhookException;
 use App\Payments\Money;
+use Stripe\Exception\ApiConnectionException;
+use Stripe\Exception\ApiErrorException;
+use Stripe\Exception\IdempotencyException;
+use Stripe\Exception\RateLimitException;
 use Stripe\Exception\SignatureVerificationException;
+use Stripe\Exception\UnknownApiErrorException;
 use Stripe\StripeClient;
 use Stripe\Webhook;
 
@@ -22,7 +31,8 @@ final class StripeGateway implements PaymentGateway {
     public function createPayment(CreatePaymentData $data): GatewayPaymentResult
     {
         $meta = ['payment_id' => (string) $data->paymentId ];
-        $session = $this->client->checkout->sessions->create([
+        try {
+            $session = $this->client->checkout->sessions->create([
             'mode' => 'payment',
             'line_items' => [[
                 'quantity' => 1,
@@ -36,10 +46,15 @@ final class StripeGateway implements PaymentGateway {
             'payment_intent_data' => ['metadata' => $meta],
             'success_url' => $data->successUrl,
             'cancel_url' => $data->cancelUrl,
-            'expires_at' => time() + 31 * 60,
+            'expires_at' => $data->expiresAt,
             ], [
                 'idempotency_key' => $data->idempotencyKey,
         ]);
+        } catch (ApiConnectionException | RateLimitException | UnknownApiErrorException | IdempotencyException $e) {
+            throw new GatewayUnavailableException($e->getMessage(), 0, $e);
+        } catch (ApiErrorException $e) {
+            throw new GatewayRejectedException($e->getMessage(), 0, $e);
+        }
         return new GatewayPaymentResult(providerRef: $session->id, redirectUrl: $session->url);
     }
 

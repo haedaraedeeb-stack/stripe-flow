@@ -11,5 +11,6 @@ final readonly class CreatePaymentData {
         public string $successUrl,
         public string $cancelUrl,
         public string $idempotencyKey,
+        public int $expiresAt,
     ){}
 }
