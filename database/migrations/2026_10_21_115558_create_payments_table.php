@@ -16,7 +16,7 @@ return new class extends Migration
             $table->foreignId('contract_cycle_id')->constrained('contract_cycles')->restrictOnDelete();
             $table->string('method');
             $table->string('status')->default('initiated');;
-            $table->decimal('amount-usd', 12, 2);
+            $table->decimal('amount_usd', 12, 2);
             $table->string('currency', 3)->default('usd');
             $table->string('provider_ref')->nullable()->index();
             $table->string('provider_payment_ref')->nullable();

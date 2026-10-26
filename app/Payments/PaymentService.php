@@ -3,15 +3,19 @@
 namespace App\Payments;
 
 use App\Enums\ContractCycleStatus;
+use App\Enums\GatewayEventType;
 use App\Enums\PaymentStatus;
+use App\Events\PaymentSucceeded;
 use App\Models\ContractCycle;
 use App\Models\Payment;
 use App\Models\User;
 use App\Payments\DTO\CreatePaymentData;
+use App\Payments\DTO\GatewayEvent;
 use App\Payments\Exceptions\GatewayRejectedException;
 use App\Payments\Exceptions\GatewayUnavailableException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 final class PaymentService
 {
@@ -101,5 +105,52 @@ final class PaymentService
                 'redirect_url' => $result->redirectUrl,
                 'status'       => PaymentStatus::Pending->value,
             ]);
+    }
+
+    public function applyGatewayEvent(GatewayEvent $e): void
+    {
+        $payment = $e->paymentId ? Payment::lockForUpdate()->find($e->paymentId) : null;
+        if (!$payment) {
+            Log::warning('payment.event_for_unknown_payment', ['event' => $e->id]);
+            return;
+        }
+        match ($e->type) {
+            GatewayEventType::Succeeded => $this->markSucceeded($payment, $e),
+            GatewayEventType::Failed => $this->transition($payment, PaymentStatus::Failed, ['failure_reason' => $e->failureReason]),
+            GatewayEventType::Expired => $this->transition($payment, PaymentStatus::Expired),
+        };
+    }
+
+    private function markSucceeded(Payment $payment , GatewayEvent $e): void
+    {
+        $mismatch = $e->amountMinor !== Money::toMinor($payment->amount_usd)
+        || strtolower((string) $e->currency) !== $payment->currency;
+        if ($mismatch) {
+            Log::critical("payment.amount_mismatch" , ['payment' => $payment->id, 'event' => $e->id]);
+            return;
+        }
+        $changes = $this->transition($payment , PaymentStatus::Succeeded,
+        [
+            'confirmed_at' => now(),
+            'provider_payment_ref' => $e->paymentRef,
+        ]);
+        if ($changes) {
+            event(new PaymentSucceeded($payment));
+        }
+    }
+
+    private function transition (Payment $payment, PaymentStatus $to, array $attr = []): bool
+    {
+        if ($payment->status === $to)
+            {
+                return false;
+            }
+        if ( !$payment->status->canTransitionTo($to))
+            {
+                Log::info('payment.transition_ignored', ['payment' => $payment->id, 'from' => $payment->status, 'to' => $to]);
+                return false;
+            }
+        $payment->update(['status' => $to, ...$attr]);
+        return true;
     }
 }
